@@ -64,6 +64,8 @@
       <CodeGenerationRoslynToolPath
         Condition="'$(GenerateCodeFromAttributesToolPathOverride)' != ''">$(GenerateCodeFromAttributesToolPathOverride)</CodeGenerationRoslynToolPath>
       <CodeGenerationRoslynToolPath>$(CodeGenerationRoslynToolPath.Trim())</CodeGenerationRoslynToolPath>
+      <CodeGenerationRoslynFilesOutputPath
+        Condition="'$(CodeGenerationRoslynFilesOutputPath)' == ''">$(IntermediateOutputPath)</CodeGenerationRoslynFilesOutputPath>
       <_CodeGenToolOutputBasePath>$(IntermediateOutputPath)$(MSBuildProjectFile).dotnet-codegen</_CodeGenToolOutputBasePath>
       <_CodeGenToolResponseFileFullPath>$(_CodeGenToolOutputBasePath).rsp</_CodeGenToolResponseFileFullPath>
       <_CodeGenToolGeneratedFileListFullPath>$(_CodeGenToolOutputBasePath).GeneratedFileList.txt</_CodeGenToolGeneratedFileListFullPath>
@@ -73,7 +75,7 @@
         @(_CodeGenerationRoslynResolvedProperty->'%(Key)=%(Value)'->Replace(';', '%3B')->'--buildProperty;%(Identity)');
         @(CodeGenerationRoslynPlugin->'--plugin;%(Identity)');
         --out;
-        $(IntermediateOutputPath);
+        $(CodeGenerationRoslynFilesOutputPath);
         --projectDir;
         $(MSBuildProjectDirectory);
         --generatedFilesList;
