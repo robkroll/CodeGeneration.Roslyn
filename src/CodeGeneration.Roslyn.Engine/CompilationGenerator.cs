@@ -1,6 +1,10 @@
 ﻿// Copyright (c) Andrew Arnott. All rights reserved.
 // Licensed under the MS-PL license. See LICENSE.txt file in the project root for full license information.
 
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace CodeGeneration.Roslyn.Engine
 {
     using System;
@@ -31,6 +35,10 @@ namespace CodeGeneration.Roslyn.Engine
         private readonly List<string> additionalWrittenFiles = new List<string>();
         private readonly List<string> loadedAssemblies = new List<string>();
         private readonly Dictionary<string, (PluginLoader Loader, Assembly Assembly)> cachedPlugins = new Dictionary<string, (PluginLoader, Assembly)>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, DateTime> fileLastModifiedDates;
+        private readonly DateTime assembliesLastModified;
+
+        private string DictionaryFilePath => Path.Combine(IntermediateOutputDirectory, "fileLastModified.json");
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CompilationGenerator"/> class.
@@ -51,6 +59,9 @@ namespace CodeGeneration.Roslyn.Engine
             PluginPaths = pluginPaths ?? throw new ArgumentNullException(nameof(pluginPaths));
             IntermediateOutputDirectory = intermediateOutputDirectory ?? throw new ArgumentNullException(nameof(intermediateOutputDirectory));
             BuildProperties = buildProperties ?? throw new ArgumentNullException(nameof(buildProperties));
+
+            fileLastModifiedDates = ReadFileLastModifiedDateDictionary();
+            assembliesLastModified = GetLastModifiedAssemblyTime();
         }
 
         /// <summary>
@@ -103,6 +114,78 @@ namespace CodeGeneration.Roslyn.Engine
         /// </summary>
         public string? ProjectDirectory { get; }
 
+        private Dictionary<string, DateTime> ReadFileLastModifiedDateDictionary()
+        {
+            if (!File.Exists(DictionaryFilePath))
+            {
+                return new Dictionary<string, DateTime>();
+            }
+
+            string json = File.ReadAllText(DictionaryFilePath);
+            var dict = JsonSerializer.Deserialize<Dictionary<string, DateTime>>(json);
+
+            return dict;
+        }
+
+        private void WriteFileLastModifiedDateDictionary()
+        {
+            File.WriteAllText(DictionaryFilePath, JsonSerializer.Serialize(fileLastModifiedDates));
+        }
+
+        private DateTime GetFileLastWriteTime(string fileName)
+        {
+            if (fileLastModifiedDates.TryGetValue(fileName, out DateTime lastWriteTime))
+            {
+                return lastWriteTime;
+            }
+
+            return DateTime.MinValue;
+        }
+
+        private void UpdateFileLastWriteTime(string fileName)
+        {
+            fileLastModifiedDates[fileName] = DateTime.Now;
+        }
+
+        private bool IsFileModified(SHA1 hasher, string filePath, out string outputFileName)
+        {
+            string sourceHash = Convert.ToBase64String(hasher.ComputeHash(Encoding.UTF8.GetBytes(filePath)), 0, 6).Replace('/', '-');
+            Logger.Info($"File \"{filePath}\" hashed to {sourceHash}");
+
+            outputFileName = Path.GetFileNameWithoutExtension(filePath) + $".{sourceHash}.generated.cs";
+            
+            DateTime outputLastModified = GetFileLastWriteTime(outputFileName);
+            Logger.Info("outputLastModified: " + outputLastModified);
+
+            bool isFileModified = File.GetLastWriteTime(filePath) > outputLastModified;
+            Logger.Info("isFileModified: " + isFileModified);
+
+            bool isAssemblyModified = assembliesLastModified > outputLastModified;
+            Logger.Info("isAssemblyModified: " + isAssemblyModified);
+
+            return isFileModified || isAssemblyModified;
+        }
+
+        private async Task<(bool result, string outputFileName)> ShouldGenerateFile(SHA1 hasher, CSharpCompilation compilation, SyntaxTree inputSyntaxTree, CancellationToken cancellationToken)
+        {
+            if (!IsFileModified(hasher, inputSyntaxTree.FilePath, out string outputFileName))
+            {
+                Logger.Info($"File not modified for \"{inputSyntaxTree.FilePath}\". Skipping generation for this file.");
+                return (false, outputFileName);
+            }
+
+            // file will or won't be generated, but we store the current time as it has been processed
+            UpdateFileLastWriteTime(outputFileName);
+
+            if (!await DocumentTransform.HasCodeGenerators(compilation, inputSyntaxTree, cancellationToken))
+            {
+                Logger.Info($"No code generators found for \"{inputSyntaxTree.FilePath}\". Skipping generation for this file.");
+                return (false, outputFileName);
+            }
+
+            return (true, outputFileName);
+        }
+
         /// <summary>
         /// Runs the code generation as configured using this instance's properties.
         /// </summary>
@@ -118,9 +201,6 @@ namespace CodeGeneration.Roslyn.Engine
 
             var compilation = this.CreateCompilation(cancellationToken);
 
-            // For incremental build, we want to consider the input->output files as well as the assemblies involved in code generation.
-            DateTime assembliesLastModified = GetLastModifiedAssemblyTime();
-
             var fileFailures = new List<Exception>();
 
             using (var hasher = System.Security.Cryptography.SHA1.Create())
@@ -129,68 +209,74 @@ namespace CodeGeneration.Roslyn.Engine
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    string sourceHash = Convert.ToBase64String(hasher.ComputeHash(Encoding.UTF8.GetBytes(inputSyntaxTree.FilePath)), 0, 6).Replace('/', '-');
-                    Logger.Info($"File \"{inputSyntaxTree.FilePath}\" hashed to {sourceHash}");
-                    string outputFilePath = Path.Combine(this.IntermediateOutputDirectory, Path.GetFileNameWithoutExtension(inputSyntaxTree.FilePath) + $".{sourceHash}.generated.cs");
+                    Logger.Info("Started processing file " + inputSyntaxTree.FilePath);
+                    //Logger.Info("InputSyntaxTree:" + Environment.NewLine + inputSyntaxTree);
 
-                    // Code generation is relatively fast, but it's not free.
-                    // So skip files that haven't changed since we last generated them.
-                    DateTime outputLastModified = File.Exists(outputFilePath) ? File.GetLastWriteTime(outputFilePath) : DateTime.MinValue;
-                    if (File.GetLastWriteTime(inputSyntaxTree.FilePath) > outputLastModified || assembliesLastModified > outputLastModified)
+                    var shouldGen = await ShouldGenerateFile(hasher, compilation, inputSyntaxTree, cancellationToken);
+                    if (!shouldGen.result)
                     {
-                        int retriesLeft = 3;
-                        do
-                        {
-                            try
-                            {
-                                var generatedSyntaxTree = await DocumentTransform.TransformAsync(
-                                    compilation,
-                                    inputSyntaxTree,
-                                    this.ProjectDirectory,
-                                    this.BuildProperties,
-                                    this.LoadPlugin,
-                                    progress,
-                                    cancellationToken);
-                                var outputText = await generatedSyntaxTree.GetTextAsync(cancellationToken);
-                                using (var outputFileStream = File.OpenWrite(outputFilePath))
-                                using (var outputWriter = new StreamWriter(outputFileStream))
-                                {
-                                    outputText.Write(outputWriter, cancellationToken);
-
-                                    // Truncate any data that may be beyond this point if the file existed previously.
-                                    outputWriter.Flush();
-                                    outputFileStream.SetLength(outputFileStream.Position);
-                                }
-
-                                if (!(generatedSyntaxTree is null))
-                                {
-                                    var root = await generatedSyntaxTree.GetRootAsync(cancellationToken);
-                                    bool anyTypesGenerated = root.DescendantNodes().OfType<TypeDeclarationSyntax>().Any();
-                                    if (!anyTypesGenerated)
-                                    {
-                                        this.emptyGeneratedFiles.Add(outputFilePath);
-                                    }
-                                }
-                                break;
-                            }
-                            catch (IOException ex) when (ex.HResult == ProcessCannotAccessFileHR && retriesLeft > 0)
-                            {
-                                retriesLeft--;
-                                await Task.Delay(200, cancellationToken);
-                            }
-                            catch (Exception ex) when (!(ex is OperationCanceledException))
-                            {
-                                ReportError(progress, "CGR001", inputSyntaxTree, ex);
-                                fileFailures.Add(ex);
-                                break;
-                            }
-                        }
-                        while (true);
+                        continue;
                     }
+
+                    string outputFilePath = Path.Combine(this.IntermediateOutputDirectory, shouldGen.outputFileName);
+                    Logger.Info("File output will be: " + outputFilePath);
+
+                    int retriesLeft = 3;
+                    do
+                    {
+                        try
+                        {
+                            var generatedSyntaxTree = await DocumentTransform.TransformAsync(
+                                compilation,
+                                inputSyntaxTree,
+                                this.ProjectDirectory,
+                                this.BuildProperties,
+                                this.LoadPlugin,
+                                progress,
+                                cancellationToken);
+
+                            var outputText = await generatedSyntaxTree.GetTextAsync(cancellationToken);
+
+                            using (var outputFileStream = File.OpenWrite(outputFilePath))
+                            using (var outputWriter = new StreamWriter(outputFileStream))
+                            {
+                                outputText.Write(outputWriter, cancellationToken);
+
+                                // Truncate any data that may be beyond this point if the file existed previously.
+                                outputWriter.Flush();
+                                outputFileStream.SetLength(outputFileStream.Position);
+                            }
+
+                            if (!(generatedSyntaxTree is null))
+                            {
+                                var root = await generatedSyntaxTree.GetRootAsync(cancellationToken);
+                                bool anyTypesGenerated = root.DescendantNodes().OfType<TypeDeclarationSyntax>().Any();
+                                if (!anyTypesGenerated)
+                                {
+                                    this.emptyGeneratedFiles.Add(outputFilePath);
+                                }
+                            }
+                            break;
+                        }
+                        catch (IOException ex) when (ex.HResult == ProcessCannotAccessFileHR && retriesLeft > 0)
+                        {
+                            retriesLeft--;
+                            await Task.Delay(200, cancellationToken);
+                        }
+                        catch (Exception ex) when (!(ex is OperationCanceledException))
+                        {
+                            ReportError(progress, "CGR001", inputSyntaxTree, ex);
+                            fileFailures.Add(ex);
+                            break;
+                        }
+                    }
+                    while (true);
 
                     this.generatedFiles.Add(outputFilePath);
                 }
             }
+
+            WriteFileLastModifiedDateDictionary();
 
             if (fileFailures.Count > 0)
             {

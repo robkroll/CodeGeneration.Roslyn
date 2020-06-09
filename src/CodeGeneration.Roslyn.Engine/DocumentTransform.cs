@@ -120,6 +120,57 @@ namespace CodeGeneration.Roslyn.Engine
             return compilationUnit.SyntaxTree;
         }
 
+        public static async Task<bool> HasCodeGenerators(
+            CSharpCompilation compilation,
+            SyntaxTree inputDocument,
+            CancellationToken cancellationToken)
+        {
+            var inputSemanticModel = compilation.GetSemanticModel(inputDocument);
+            var root = await inputDocument.GetRootAsync(cancellationToken);
+            var memberNodes = root
+                .DescendantNodesAndSelf(n =>
+                    n is CompilationUnitSyntax || n is NamespaceDeclarationSyntax || n is TypeDeclarationSyntax)
+                .OfType<CSharpSyntaxNode>();
+
+            foreach (var memberNode in memberNodes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var attributeData = GetAttributeData(compilation, inputSemanticModel, memberNode);
+                if (HasCodeGenerators(attributeData))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasCodeGenerators(ImmutableArray<AttributeData> nodeAttributes)
+        {
+            foreach (var attributeData in nodeAttributes)
+            {
+                if (HasCodeGeneratorTypeForAttribute(attributeData.AttributeClass))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasCodeGeneratorTypeForAttribute(INamedTypeSymbol attributeType)
+        {
+            foreach (var generatorCandidateAttribute in attributeType.GetAttributes())
+            {
+                if (generatorCandidateAttribute.AttributeClass.Name == typeof(CodeGenerationAttributeAttribute).Name)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static ImmutableArray<AttributeData> GetAttributeData(Compilation compilation, SemanticModel document, SyntaxNode syntaxNode)
         {
             Requires.NotNull(compilation, nameof(compilation));
@@ -137,8 +188,12 @@ namespace CodeGeneration.Roslyn.Engine
 
         private static IEnumerable<ICodeGenerator> FindCodeGenerators(ImmutableArray<AttributeData> nodeAttributes, Func<AssemblyName, Assembly?> assemblyLoader)
         {
+            Logger.Info("nodeAttributes: ");
+
             foreach (var attributeData in nodeAttributes)
             {
+                Logger.Info("nodeAttribute: " + attributeData);
+
                 Type? generatorType = GetCodeGeneratorTypeForAttribute(attributeData.AttributeClass, assemblyLoader);
                 if (generatorType != null)
                 {
