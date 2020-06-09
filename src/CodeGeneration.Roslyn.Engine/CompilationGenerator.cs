@@ -35,10 +35,9 @@ namespace CodeGeneration.Roslyn.Engine
         private readonly List<string> additionalWrittenFiles = new List<string>();
         private readonly List<string> loadedAssemblies = new List<string>();
         private readonly Dictionary<string, (PluginLoader Loader, Assembly Assembly)> cachedPlugins = new Dictionary<string, (PluginLoader, Assembly)>(StringComparer.OrdinalIgnoreCase);
+        private readonly string _fileLastModifiedPath;
         private readonly Dictionary<string, DateTime> fileLastModifiedDates;
         private readonly DateTime assembliesLastModified;
-
-        private string DictionaryFilePath => Path.Combine(IntermediateOutputDirectory, "fileLastModified.json");
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CompilationGenerator"/> class.
@@ -49,8 +48,12 @@ namespace CodeGeneration.Roslyn.Engine
         /// <param name="preprocessorSymbols">A set of preprocessor symbols to define.</param>
         /// <param name="pluginPaths">The paths to plugins.</param>
         /// <param name="intermediateOutputDirectory">The path to the directory that contains generated source files.</param>
+        /// <param name="fileLastModifiedPath"></param>
         /// <param name="buildProperties">The build properties to expose to generators.</param>
-        public CompilationGenerator(string? projectDirectory, IReadOnlyList<string> compile, IReadOnlyList<string> referencePath, IEnumerable<string> preprocessorSymbols, IReadOnlyList<string> pluginPaths, string intermediateOutputDirectory, IReadOnlyDictionary<string, string> buildProperties)
+        public CompilationGenerator(string? projectDirectory, IReadOnlyList<string> compile,
+            IReadOnlyList<string> referencePath, IEnumerable<string> preprocessorSymbols,
+            IReadOnlyList<string> pluginPaths, string intermediateOutputDirectory, string fileLastModifiedPath,
+            IReadOnlyDictionary<string, string> buildProperties)
         {
             ProjectDirectory = projectDirectory;
             Compile = compile ?? throw new ArgumentNullException(nameof(compile));
@@ -60,6 +63,7 @@ namespace CodeGeneration.Roslyn.Engine
             IntermediateOutputDirectory = intermediateOutputDirectory ?? throw new ArgumentNullException(nameof(intermediateOutputDirectory));
             BuildProperties = buildProperties ?? throw new ArgumentNullException(nameof(buildProperties));
 
+            _fileLastModifiedPath = fileLastModifiedPath ?? throw new ArgumentNullException(nameof(fileLastModifiedPath));
             fileLastModifiedDates = ReadFileLastModifiedDateDictionary();
             assembliesLastModified = GetLastModifiedAssemblyTime();
         }
@@ -116,12 +120,12 @@ namespace CodeGeneration.Roslyn.Engine
 
         private Dictionary<string, DateTime> ReadFileLastModifiedDateDictionary()
         {
-            if (!File.Exists(DictionaryFilePath))
+            if (!File.Exists(_fileLastModifiedPath))
             {
                 return new Dictionary<string, DateTime>();
             }
 
-            string json = File.ReadAllText(DictionaryFilePath);
+            string json = File.ReadAllText(_fileLastModifiedPath);
             var dict = JsonSerializer.Deserialize<Dictionary<string, DateTime>>(json);
 
             return dict;
@@ -129,7 +133,7 @@ namespace CodeGeneration.Roslyn.Engine
 
         private void WriteFileLastModifiedDateDictionary()
         {
-            File.WriteAllText(DictionaryFilePath, JsonSerializer.Serialize(fileLastModifiedDates));
+            File.WriteAllText(_fileLastModifiedPath, JsonSerializer.Serialize(fileLastModifiedDates));
         }
 
         private DateTime GetFileLastWriteTime(string fileName)
@@ -153,15 +157,11 @@ namespace CodeGeneration.Roslyn.Engine
             Logger.Info($"File \"{filePath}\" hashed to {sourceHash}");
 
             outputFileName = Path.GetFileNameWithoutExtension(filePath) + $".{sourceHash}.generated.cs";
-            
+
             DateTime outputLastModified = GetFileLastWriteTime(outputFileName);
-            Logger.Info("outputLastModified: " + outputLastModified);
 
             bool isFileModified = File.GetLastWriteTime(filePath) > outputLastModified;
-            Logger.Info("isFileModified: " + isFileModified);
-
             bool isAssemblyModified = assembliesLastModified > outputLastModified;
-            Logger.Info("isAssemblyModified: " + isAssemblyModified);
 
             return isFileModified || isAssemblyModified;
         }

@@ -98,7 +98,9 @@ namespace CodeGeneration.Roslyn.Generate
                 buildProperties[key] = value;
             }
 
-            var generator = new CompilationGenerator(projectDir, Sanitize(compile), Sanitize(refs), preprocessorSymbols, Sanitize(plugins), outputDirectory, Sanitize(buildProperties));
+            var fileLastModifiedPath = Path.Combine(Path.GetDirectoryName(generatedCompileItemFile), "fileLastModified.json");
+
+            var generator = new CompilationGenerator(projectDir, Sanitize(compile), Sanitize(refs), preprocessorSymbols, Sanitize(plugins), outputDirectory, fileLastModifiedPath, Sanitize(buildProperties));
 
             var progress = new Progress<Diagnostic>(OnDiagnosticProgress);
 
