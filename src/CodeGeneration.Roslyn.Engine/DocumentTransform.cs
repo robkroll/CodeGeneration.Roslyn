@@ -135,7 +135,7 @@ namespace CodeGeneration.Roslyn.Engine
             foreach (var memberNode in memberNodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var attributeData = GetAttributeData(compilation, inputSemanticModel, memberNode);
+                var attributeData = GetInheritedAttributeData(compilation, inputSemanticModel, memberNode);
                 if (HasCodeGenerators(attributeData))
                 {
                     return true;
@@ -186,13 +186,43 @@ namespace CodeGeneration.Roslyn.Engine
             }
         }
 
+        private static ImmutableArray<AttributeData> GetInheritedAttributeData(Compilation compilation, SemanticModel document, SyntaxNode syntaxNode)
+        {
+            Requires.NotNull(compilation, nameof(compilation));
+            Requires.NotNull(document, nameof(document));
+            Requires.NotNull(syntaxNode, nameof(syntaxNode));
+
+            switch (syntaxNode)
+            {
+                case CompilationUnitSyntax syntax:
+                    return compilation.Assembly.GetAttributes().Where(x => x.ApplicationSyntaxReference.SyntaxTree == syntax.SyntaxTree).ToImmutableArray();
+                default:
+                {
+                    ImmutableArray<AttributeData> ret = ImmutableArray<AttributeData>.Empty;
+                    ITypeSymbol? t = document.GetDeclaredSymbol(syntaxNode) as ITypeSymbol;
+
+                    if (t == null)
+                    {
+                        return ret;
+                    }
+
+                    do
+                    {
+                        ret = ret.AddRange(t.GetAttributes());
+                        t = t.BaseType;
+
+                    } while (t != null && t.SpecialType != SpecialType.System_Object);
+
+                    return ret;
+                }
+            }
+        }
+        
         private static IEnumerable<ICodeGenerator> FindCodeGenerators(ImmutableArray<AttributeData> nodeAttributes, Func<AssemblyName, Assembly?> assemblyLoader)
         {
-            Logger.Info("nodeAttributes: ");
-
             foreach (var attributeData in nodeAttributes)
             {
-                Logger.Info("nodeAttribute: " + attributeData);
+                Logger.Info("Using code generation attribute: " + attributeData);
 
                 Type? generatorType = GetCodeGeneratorTypeForAttribute(attributeData.AttributeClass, assemblyLoader);
                 if (generatorType != null)
