@@ -39,6 +39,8 @@ namespace CodeGeneration.Roslyn.Engine
         private readonly Dictionary<string, DateTime> fileLastModifiedDates;
         private readonly DateTime assembliesLastModified;
 
+        private const string GeneratedFileSuffix = ".generated.cs";
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CompilationGenerator"/> class.
         /// </summary>
@@ -156,7 +158,7 @@ namespace CodeGeneration.Roslyn.Engine
             string sourceHash = Convert.ToBase64String(hasher.ComputeHash(Encoding.UTF8.GetBytes(filePath)), 0, 6).Replace('/', '-');
             Logger.Info($"File \"{filePath}\" hashed to {sourceHash}");
 
-            outputFileName = Path.GetFileNameWithoutExtension(filePath) + $".{sourceHash}.generated.cs";
+            outputFileName = Path.GetFileNameWithoutExtension(filePath) + $".{sourceHash}{GeneratedFileSuffix}";
 
             DateTime outputLastModified = GetFileLastWriteTime(outputFileName);
 
@@ -168,9 +170,15 @@ namespace CodeGeneration.Roslyn.Engine
 
         private async Task<(bool result, string outputFileName)> ShouldGenerateFile(SHA1 hasher, CSharpCompilation compilation, SyntaxTree inputSyntaxTree, CancellationToken cancellationToken)
         {
+            if (inputSyntaxTree.FilePath.EndsWith(GeneratedFileSuffix))
+            {
+               Logger.Info($"File \"{inputSyntaxTree.FilePath}\" is a generated file (ends with '{GeneratedFileSuffix}'). Skipping generation for this file.");
+               return (false, string.Empty);
+            }
+
             if (!IsFileModified(hasher, inputSyntaxTree.FilePath, out string outputFileName))
             {
-                Logger.Info($"File not modified for \"{inputSyntaxTree.FilePath}\". Skipping generation for this file.");
+                Logger.Info($"File \"{inputSyntaxTree.FilePath}\" is not modified. Skipping generation for this file.");
                 return (false, outputFileName);
             }
 
