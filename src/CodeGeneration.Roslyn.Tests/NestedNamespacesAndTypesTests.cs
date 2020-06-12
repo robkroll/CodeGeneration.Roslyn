@@ -10,11 +10,11 @@ using Xunit;
 
 public class NestedNamespacesAndTypesTests
 {
-    [Fact]
-    public void NestedNamespaceTest()
-    {
-        var nested = new A.B.OuterType.MiddleType.NestedNSTypeA();
-    }
+    //[Fact]
+    //public void NestedNamespaceTest()
+    //{
+    //    var nested = new A.B.OuterType.MiddleType.NestedNSTypeA();
+    //}
 }
 
 namespace A

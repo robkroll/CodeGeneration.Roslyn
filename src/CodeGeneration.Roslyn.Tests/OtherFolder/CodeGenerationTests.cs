@@ -13,11 +13,11 @@ using Xunit;
 // That's part of the test: can we generate code for two files with the same name?
 public partial class CodeGenerationTests
 {
-    [Fact]
-    public void GenerationFromSecondFile()
-    {
-        var bar = new BarC();
-    }
+    //[Fact]
+    //public void GenerationFromSecondFile()
+    //{
+    //    var bar = new BarC();
+    //}
 
     [DuplicateWithSuffixByType("C")]
     public class Bar
