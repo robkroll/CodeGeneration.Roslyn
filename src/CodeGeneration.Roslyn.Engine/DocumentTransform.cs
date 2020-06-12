@@ -82,8 +82,8 @@ namespace CodeGeneration.Roslyn.Engine
             foreach (var memberNode in memberNodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var attributeData = GetAttributeData(compilation, inputSemanticModel, memberNode);
-                var generators = FindCodeGenerators(attributeData, assemblyLoader);
+                
+                var generators = FindCodeGenerators(compilation, inputSemanticModel, memberNode, assemblyLoader);
                 foreach (var generator in generators)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -149,7 +149,7 @@ namespace CodeGeneration.Roslyn.Engine
         {
             foreach (var attributeData in nodeAttributes)
             {
-                if (HasCodeGeneratorTypeForAttribute(attributeData.AttributeClass))
+                if (HasCodeGeneratorTypeForAttribute(attributeData.AttributeClass, out _))
                 {
                     return true;
                 }
@@ -158,16 +158,18 @@ namespace CodeGeneration.Roslyn.Engine
             return false;
         }
 
-        private static bool HasCodeGeneratorTypeForAttribute(INamedTypeSymbol attributeType)
+        private static bool HasCodeGeneratorTypeForAttribute(INamedTypeSymbol attributeType, out AttributeData generatorAttribute)
         {
             foreach (var generatorCandidateAttribute in attributeType.GetAttributes())
             {
                 if (generatorCandidateAttribute.AttributeClass.Name == typeof(CodeGenerationAttributeAttribute).Name)
                 {
+                    generatorAttribute = generatorCandidateAttribute;
                     return true;
                 }
             }
 
+            generatorAttribute = null;
             return false;
         }
 
@@ -218,37 +220,54 @@ namespace CodeGeneration.Roslyn.Engine
             }
         }
         
-        private static IEnumerable<ICodeGenerator> FindCodeGenerators(ImmutableArray<AttributeData> nodeAttributes, Func<AssemblyName, Assembly?> assemblyLoader)
+        private static IEnumerable<ICodeGenerator> FindCodeGenerators(Compilation compilation, SemanticModel document, SyntaxNode syntaxNode, Func<AssemblyName, Assembly?> assemblyLoader)
         {
-            foreach (var attributeData in nodeAttributes)
-            {
-                Logger.Info("Using code generation attribute: " + attributeData);
+            List<ICodeGenerator> codeGenerators = new List<ICodeGenerator>();
 
-                Type? generatorType = GetCodeGeneratorTypeForAttribute(attributeData.AttributeClass, assemblyLoader);
-                if (generatorType != null)
+            var generatorTypeResult = GetCodeGeneratorTypeForAttribute(compilation, document, syntaxNode, assemblyLoader);
+
+            if (generatorTypeResult != null)
+            {
+                ICodeGenerator generator;
+                try
                 {
-                    ICodeGenerator generator;
-                    try
-                    {
-                        generator = (ICodeGenerator)Activator.CreateInstance(generatorType, attributeData);
-                    }
-                    catch (MissingMethodException)
-                    {
-                        throw new InvalidOperationException(
-                            $"Failed to instantiate {generatorType}. ICodeGenerator implementations must have" +
-                            $" a constructor accepting Microsoft.CodeAnalysis.AttributeData argument.");
-                    }
-                    yield return generator;
+                    generator = (ICodeGenerator)Activator.CreateInstance(generatorTypeResult.GeneratorType, generatorTypeResult.CandidateAttribute);
+
+                    codeGenerators.Add(generator);
                 }
+                catch (MissingMethodException)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to instantiate {generatorTypeResult}. ICodeGenerator implementations must have" +
+                        $" a constructor accepting Microsoft.CodeAnalysis.AttributeData argument.");
+                }
+
             }
+
+            return codeGenerators;
         }
 
-        private static Type? GetCodeGeneratorTypeForAttribute(INamedTypeSymbol attributeType, Func<AssemblyName, Assembly?> assemblyLoader)
+        private class GeneratorTypeResult
         {
-            foreach (var generatorCandidateAttribute in attributeType.GetAttributes())
+            public Type GeneratorType { get; }
+            public AttributeData CandidateAttribute { get; }
+
+            public GeneratorTypeResult(Type generatorType, AttributeData candidateAttribute)
             {
-                if (generatorCandidateAttribute.AttributeClass.Name == typeof(CodeGenerationAttributeAttribute).Name)
+                GeneratorType = generatorType;
+                CandidateAttribute = candidateAttribute;
+            }
+        }
+        
+
+        private static GeneratorTypeResult GetCodeGeneratorTypeForAttribute(Compilation compilation, SemanticModel document, SyntaxNode syntaxNode, Func<AssemblyName, Assembly?> assemblyLoader)
+        {
+            foreach (var candidateAttribute in GetInheritedAttributeData(compilation, document, syntaxNode))
+            {
+                if (HasCodeGeneratorTypeForAttribute(candidateAttribute.AttributeClass, out AttributeData generatorCandidateAttribute))
                 {
+                    Logger.Info($"Code generation attribute {candidateAttribute} found.");
+
                     string? assemblyName = null;
                     string? fullTypeName = null;
                     TypedConstant firstArg = generatorCandidateAttribute.ConstructorArguments.Single();
@@ -280,11 +299,22 @@ namespace CodeGeneration.Roslyn.Engine
                         var assembly = assemblyLoader(new AssemblyName(assemblyName));
                         if (assembly != null)
                         {
-                            return assembly.GetType(fullTypeName);
+                            var generatorType = assembly.GetType(fullTypeName);
+                            return new GeneratorTypeResult(generatorType, candidateAttribute);
+                        }
+                        else
+                        {
+                            Verify.FailOperation("Unable to find code generator: {0} in {1}", fullTypeName, assemblyName);
                         }
                     }
-
-                    Verify.FailOperation("Unable to find code generator: {0} in {1}", fullTypeName, assemblyName);
+                    else
+                    {
+                        Verify.FailOperation("Unable to find code generator: {0}. Containing assembly not found.", fullTypeName);
+                    }
+                }
+                else
+                {
+                    Logger.Info($"Attribute {candidateAttribute} found. Is not a code generation attribute.");
                 }
             }
 
