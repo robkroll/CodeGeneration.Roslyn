@@ -188,12 +188,8 @@ namespace CodeGeneration.Roslyn.Engine
 
         private static IEnumerable<ICodeGenerator> FindCodeGenerators(ImmutableArray<AttributeData> nodeAttributes, Func<AssemblyName, Assembly?> assemblyLoader)
         {
-            Logger.Info("nodeAttributes: ");
-
             foreach (var attributeData in nodeAttributes)
             {
-                Logger.Info("nodeAttribute: " + attributeData);
-
                 Type? generatorType = GetCodeGeneratorTypeForAttribute(attributeData.AttributeClass, assemblyLoader);
                 if (generatorType != null)
                 {
