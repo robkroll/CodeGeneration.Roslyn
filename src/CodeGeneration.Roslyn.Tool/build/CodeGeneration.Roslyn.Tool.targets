@@ -148,7 +148,12 @@
       <Output TaskParameter="Lines" ItemName="FileWrites"/>
     </ReadLinesFromFile>
     <ItemGroup>
-      <Compile Include="@(CodeGenerationRoslynOutput_Compile)" />
+      <!--
+        Files that we are generating are put into the same solution and will appear in the next Compile. 
+        If they are added now, we will get "CSC: Source file specified multiple times warning". This line
+        is needed if we are not adding the generated files to the same solution.
+      -->
+      <!--<Compile Include="@(CodeGenerationRoslynOutput_Compile)" />-->
       <FileWrites Include="$(_CodeGenToolGeneratedFileListFullPath)" />
     </ItemGroup>
   </Target>
