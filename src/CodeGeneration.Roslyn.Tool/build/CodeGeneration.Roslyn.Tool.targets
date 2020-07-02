@@ -140,20 +140,19 @@
       Condition="Exists('$(_CodeGenToolGeneratedFileListFullPath)') != 'true'" />
   </Target>
 
+  <!--
+    If the 'CodeGenerationRoslynToolOutputPath' variable is overridden, it is because files that we are generating are put into the same solution and will appear in the next Compile. 
+    If they are added now, we will get "CSC: Source file specified multiple times warning". This line is needed if we are not adding the generated files to the same solution.
+  -->
   <Target Name="ReadGenerateCodeFromAttributesResults"
-    Condition=" Exists('$(_CodeGenToolGeneratedFileListFullPath)') ">
+          Condition=" Exists('$(_CodeGenToolGeneratedFileListFullPath)') AND '$(CodeGenerationRoslynToolOutputPath)' == '$(IntermediateOutputPath)' ">
     <!-- Process tool results: read generated files list and add them to Compile -->
     <ReadLinesFromFile File="$(_CodeGenToolGeneratedFileListFullPath)">
       <Output TaskParameter="Lines" ItemName="CodeGenerationRoslynOutput_Compile"/>
       <Output TaskParameter="Lines" ItemName="FileWrites"/>
     </ReadLinesFromFile>
     <ItemGroup>
-      <!--
-        Files that we are generating are put into the same solution and will appear in the next Compile. 
-        If they are added now, we will get "CSC: Source file specified multiple times warning". This line
-        is needed if we are not adding the generated files to the same solution.
-      -->
-      <!--<Compile Include="@(CodeGenerationRoslynOutput_Compile)" />-->
+      <Compile Include="@(CodeGenerationRoslynOutput_Compile)" />
       <FileWrites Include="$(_CodeGenToolGeneratedFileListFullPath)" />
     </ItemGroup>
   </Target>
